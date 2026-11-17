@@ -1,0 +1,21 @@
+# Variables de entorno (NUNCA subir secretos)
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# Dependencias
+node_modules/
+
+# Builds / salida
+dist/
+build/
+
+# Subidas locales (mantener .gitkeep)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
