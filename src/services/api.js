@@ -56,3 +56,45 @@ export async function apiFetch(endpoint, options = {}) {
 
   return data;
 }
+
+// Gestión de técnicos
+export function crearTecnico(data) {
+  return apiFetch('/tecnicos', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Catálogo de repuestos e inventario
+export function getRepuestos() {
+  return apiFetch('/repuestos');
+}
+
+export function crearRepuesto(data) {
+  return apiFetch('/repuestos', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function actualizarRepuesto(id, data) {
+  return apiFetch(`/repuestos/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+// Evaluación económica y conversión de cotizaciones
+export function evaluarCotizacion(id, data) {
+  return apiFetch(`/cotizaciones/${id}/evaluar`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export function convertirCotizacionASolicitud(id, data) {
+  return apiFetch(`/cotizaciones/${id}/convertir`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}

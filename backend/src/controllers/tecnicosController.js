@@ -1,5 +1,6 @@
 // controllers/tecnicosController.js
-import { query } from '../config/db.js';
+import bcrypt from 'bcryptjs';
+import pool, { query } from '../config/db.js';
 import { registrarAuditoria } from '../utils/audit.js';
 
 // GET /api/tecnicos
@@ -52,5 +53,59 @@ export async function patchDisponibilidad(req, res, next) {
     res.json(rows[0]);
   } catch (error) {
     next(error);
+  }
+}
+
+// POST /api/tecnicos
+// Crea un técnico y su usuario de acceso en una sola transacción.
+export async function createTecnico(req, res, next) {
+  const client = await pool.connect();
+  try {
+    const { nombre, email, password, zona, especialidad, nota = '' } = req.body || {};
+
+    if (!nombre || !email || !password || !zona || !especialidad) {
+      return res.status(400).json({ error: 'nombre, email, password, zona y especialidad son obligatorios' });
+    }
+
+    const correo = String(email).trim().toLowerCase();
+    const { rows: existentes } = await query('SELECT 1 FROM usuarios WHERE email = $1', [correo]);
+    if (existentes.length > 0) {
+      return res.status(409).json({ error: 'El correo ya está registrado en usuarios' });
+    }
+
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      `INSERT INTO tecnicos (nombre, zona, especialidad, disponible, nota)
+       VALUES ($1, $2, $3, TRUE, $4)
+       RETURNING id, nombre, zona, especialidad, disponible, nota, created_at`,
+      [nombre, zona, especialidad, nota]
+    );
+    const tecnico = rows[0];
+
+    const passwordHash = await bcrypt.hash(String(password), 10);
+    await client.query(
+      `INSERT INTO usuarios (email, password_hash, nombre, rol, dos_fa, tec_id)
+       VALUES ($1, $2, $3, 'tecnico', TRUE, $4)`,
+      [correo, passwordHash, nombre, tecnico.id]
+    );
+
+    await client.query('COMMIT');
+
+    await registrarAuditoria({
+      usuario: req.user.email,
+      accion: 'Creación de técnico',
+      detalle: `Técnico ${tecnico.id} (${correo}) - ${nombre}`,
+    });
+
+    return res.status(201).json({ ...tecnico, ordenes_activas: 0 });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'El correo ya está registrado en usuarios' });
+    }
+    next(error);
+  } finally {
+    client.release();
   }
 }

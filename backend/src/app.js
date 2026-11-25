@@ -15,6 +15,7 @@ import clientesRoutes from './routes/clientesRoutes.js';
 import solicitudesRoutes from './routes/solicitudesRoutes.js';
 import ordenesRoutes from './routes/ordenesRoutes.js';
 import cotizacionesRoutes from './routes/cotizacionesRoutes.js';
+import repuestosRoutes from './routes/repuestosRoutes.js';
 import reportesRoutes from './routes/reportesRoutes.js';
 import auditoriaRoutes from './routes/auditoriaRoutes.js';
 
@@ -48,6 +49,7 @@ app.use('/api/clientes', clientesRoutes);
 app.use('/api/solicitudes', solicitudesRoutes);
 app.use('/api/ordenes', ordenesRoutes);
 app.use('/api/cotizaciones', cotizacionesRoutes);
+app.use('/api/repuestos', repuestosRoutes);
 app.use('/api/reportes', reportesRoutes);
 app.use('/api/auditoria', auditoriaRoutes);
 

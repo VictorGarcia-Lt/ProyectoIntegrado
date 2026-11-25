@@ -1,14 +1,20 @@
 import { useState, useEffect } from 'react'
-import { ClipboardList, Users, FileText, BarChart3, ShieldCheck, LogOut, AlertTriangle, Wrench, UserCheck, Bell, Plus, Search, Globe, Phone, MessageCircle, Radio, Truck, Snowflake, X, Building2, Activity, Clock } from 'lucide-react'
+import { ClipboardList, Users, FileText, BarChart3, ShieldCheck, LogOut, AlertTriangle, Wrench, UserCheck, Bell, Plus, Search, Globe, Phone, MessageCircle, Radio, Truck, Snowflake, X, Building2, Activity, Clock, Package, DollarSign, TrendingUp, CheckCircle2, ArrowRight } from 'lucide-react'
 import { getSolicitudes, crearSolicitud, asignarTecnico, getClientes, getHistorialCliente, getTecnicos, cambiarDisponibilidad } from '../services/operacionesService'
 import { getCotizaciones, cambiarEstadoCotizacion } from '../services/gestionService'
 import { getResumenReportes, getAuditoria } from '../services/gestionService'
+import { crearTecnico, getRepuestos, crearRepuesto, actualizarRepuesto, evaluarCotizacion, convertirCotizacionASolicitud } from '../services/api'
 import logoJGFrio from '../img/logo-jgfrio.png'
 
 const OR = { Web: Globe, Teléfono: Phone, WhatsApp: MessageCircle, SITRAD: Radio }
 const ORD = { Urgente: 0, Alta: 1, Normal: 2 }
 
-const titulos = { sol: 'Solicitudes de Servicio', cli: 'Clientes e Instalaciones', tec: 'Flota de Técnicos', cot: 'Cotizaciones', rep: 'Reportes y KPIs', aud: 'Auditoría del Sistema' }
+const titulos = { sol: 'Solicitudes de Servicio', cli: 'Clientes e Instalaciones', tec: 'Flota de Técnicos', cot: 'Cotizaciones', inv: 'Inventario y Repuestos', rep: 'Reportes y KPIs', aud: 'Auditoría del Sistema' }
+
+const money = n => '$' + Number(n || 0).toLocaleString('es-CL')
+const costoTotalCot = c => Number(c.costo_materiales || 0) + Number(c.costo_mano_obra || 0) + Number(c.otros_costos || 0)
+const inputCls = 'mt-1 w-full h-10 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-slate-700 focus:bg-white focus:border-sky-500 focus:outline-none'
+const labelCls = 'text-sm font-semibold text-slate-700'
 
 export default function DashboardOficina({ user, logout }) {
   const [tab, setTab] = useState('sol')
@@ -19,6 +25,10 @@ export default function DashboardOficina({ user, logout }) {
   const [cotizaciones, setCotizaciones] = useState([])
   const [reportes, setReportes] = useState(null)
   const [auditoria, setAuditoria] = useState([])
+  const [repuestos, setRepuestos] = useState([])
+  const [evalCot, setEvalCot] = useState(null)
+  const [showNuevoTec, setShowNuevoTec] = useState(false)
+  const [showNuevoRep, setShowNuevoRep] = useState(false)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
 
@@ -31,6 +41,8 @@ export default function DashboardOficina({ user, logout }) {
 
   const puedeAsignar = user.rol !== 'ventas'
   const puedeEditarCot = user.rol === 'ventas' || user.rol === 'admin'
+  const puedeGestionarTec = user.rol === 'encargado' || user.rol === 'admin'
+  const puedeGestionarInv = puedeGestionarTec || user.rol === 'ventas'
 
   const cn = id => clientes.find(c => c.id === id)
 
@@ -39,6 +51,7 @@ export default function DashboardOficina({ user, logout }) {
     ['cli', 'Clientes', Users],
     ['tec', 'Técnicos', Truck],
     ['cot', 'Cotizaciones', FileText],
+    ['inv', 'Inventario', Package],
     ['rep', 'Reportes', BarChart3],
     ...(user.rol !== 'ventas' ? [['aud', 'Auditoría', ShieldCheck]] : []),
   ]
@@ -49,12 +62,14 @@ export default function DashboardOficina({ user, logout }) {
   const loadCotizaciones = async () => { try { setCotizaciones(await getCotizaciones()) } catch (e) { setErr(e.message) } }
   const loadReportes = async () => { try { setReportes(await getResumenReportes()) } catch (e) { setErr(e.message) } }
   const loadAuditoria = async () => { try { setAuditoria(await getAuditoria()) } catch (e) { setErr(e.message) } }
+  const loadRepuestos = async () => { try { setRepuestos(await getRepuestos()) } catch (e) { setErr(e.message) } }
 
-  useEffect(() => { loadTecnicos(); loadClientes() }, [])
+  useEffect(() => { loadTecnicos(); loadClientes(); loadRepuestos() }, [])
   useEffect(() => { if (tab === 'sol') loadSols() }, [tab, fl.estado, fl.zona, fl.urg, fl.q])
   useEffect(() => { if (tab === 'cli') loadClientes() }, [tab])
   useEffect(() => { if (tab === 'tec') loadTecnicos() }, [tab])
   useEffect(() => { if (tab === 'cot') loadCotizaciones() }, [tab])
+  useEffect(() => { if (tab === 'inv') loadRepuestos() }, [tab])
   useEffect(() => { if (tab === 'rep') loadReportes() }, [tab])
   useEffect(() => { if (tab === 'aud') loadAuditoria() }, [tab])
 
@@ -64,7 +79,12 @@ export default function DashboardOficina({ user, logout }) {
   }
   const asignar = async () => {
     if (!sel) return
-    try { await asignarTecnico(asig.id, sel); await loadSols(); setAsig(null); setSel(null) } catch (e) { setErr(e.message) }
+    try {
+      const resultado = await asignarTecnico(asig.id, sel)
+      await loadSols()
+      if (resultado?.fuera_de_zona) setErr(`Asignado fuera de zona: solicitud ${resultado.zona_solicitud} · técnico ${resultado.zona_tecnico}.`)
+      setAsig(null); setSel(null)
+    } catch (e) { setErr(e.message) }
   }
   const abrirFicha = async c => {
     setFicha(c)
@@ -76,6 +96,22 @@ export default function DashboardOficina({ user, logout }) {
   const cambiarEstadoCot = async (id, estado) => {
     try { await cambiarEstadoCotizacion(id, estado); await loadCotizaciones() } catch (e) { setErr(e.message) }
   }
+  const guardarTecnico = async datos => {
+    try { await crearTecnico(datos); await loadTecnicos(); setShowNuevoTec(false) } catch (e) { setErr(e.message) }
+  }
+  const guardarRepuesto = async datos => {
+    try {
+      const existente = repuestos.find(r => r.codigo.trim().toLowerCase() === String(datos.codigo).trim().toLowerCase())
+      if (existente) {
+        await actualizarRepuesto(existente.id, { stock: Number(existente.stock) + Number(datos.stock || 0) })
+      } else {
+        await crearRepuesto(datos)
+      }
+      await loadRepuestos(); setShowNuevoRep(false)
+    } catch (e) { setErr(e.message) }
+  }
+  const trasEvaluar = async () => { await loadCotizaciones(); setEvalCot(null) }
+  const trasConvertir = async () => { await loadCotizaciones(); await loadSols(); setEvalCot(null) }
 
   const lista = (sols || []).slice().sort((a, b) => ORD[a.urgencia || a.urg] - ORD[b.urgencia || b.urg])
   const kpiUrgentes = sols.filter(s => (s.urgencia || s.urg) === 'Urgente' && s.estado !== 'Finalizado').length
@@ -227,6 +263,13 @@ export default function DashboardOficina({ user, logout }) {
           )}
 
           {tab === 'tec' && (
+            <>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">Flota de Técnicos</h3>
+              {puedeGestionarTec && (
+                <button onClick={() => setShowNuevoTec(true)} className="inline-flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-white font-semibold px-4 py-2 rounded-lg text-sm shadow-sm transition"><Plus size={16} /> Nuevo Técnico</button>
+              )}
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
               {tecnicos.map(t => (
                 <div key={t.id} className="bg-white rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition overflow-hidden">
@@ -259,30 +302,92 @@ export default function DashboardOficina({ user, logout }) {
                 </div>
               ))}
             </div>
+            </>
           )}
 
           {tab === 'cot' && (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5">
-              <h3 className="text-lg font-bold text-slate-900 mb-4">Cotizaciones</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-slate-900">Cotizaciones</h3>
+                <span className="text-xs text-slate-500">Umbral de rentabilidad: 20%</span>
+              </div>
               {cotizaciones.length === 0 ? <p className="text-slate-500">Aún no hay cotizaciones.</p> : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      <tr><th className="px-4 py-3.5">ID</th><th className="px-4 py-3.5">Empresa</th><th className="px-4 py-3.5">Rubro</th><th className="px-4 py-3.5">Correo</th><th className="px-4 py-3.5">Estado</th></tr>
+                      <tr>
+                        <th className="px-4 py-3.5">ID</th><th className="px-4 py-3.5">Empresa</th><th className="px-4 py-3.5">Rubro</th>
+                        <th className="px-4 py-3.5">Precio cotizado</th><th className="px-4 py-3.5">Costo total</th>
+                        <th className="px-4 py-3.5">Margen</th><th className="px-4 py-3.5">Rentabilidad</th>
+                        <th className="px-4 py-3.5">Estado</th><th className="px-4 py-3.5 text-right">Acciones</th>
+                      </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-sm">
-                      {cotizaciones.map(c => (
-                        <tr key={c.id} className="hover:bg-slate-50/80 transition">
-                          <td className="px-4 py-3.5 font-mono font-semibold text-slate-900">{c.id}</td>
-                          <td className="px-4 py-3.5 font-semibold text-slate-900">{c.empresa}</td>
-                          <td className="px-4 py-3.5 text-slate-600">{c.rubro}</td>
-                          <td className="px-4 py-3.5 text-slate-500">{c.correo}</td>
+                      {cotizaciones.map(c => {
+                        const margen = Number(c.margen_porcentaje || 0)
+                        const evaluada = c.es_rentable !== null && c.es_rentable !== undefined
+                        return (
+                          <tr key={c.id} className="hover:bg-slate-50/80 transition">
+                            <td className="px-4 py-3.5 font-mono font-semibold text-slate-900">COT-{String(c.id).padStart(4, '0')}</td>
+                            <td className="px-4 py-3.5"><div className="font-semibold text-slate-900">{c.empresa}</div><div className="text-xs text-slate-500">{c.correo}</div></td>
+                            <td className="px-4 py-3.5 text-slate-600">{c.rubro}</td>
+                            <td className="px-4 py-3.5 font-semibold text-slate-900">{money(c.precio_cotizado)}</td>
+                            <td className="px-4 py-3.5 text-slate-700">{evaluada ? money(costoTotalCot(c)) : '—'}</td>
+                            <td className="px-4 py-3.5 font-bold text-slate-900">{evaluada ? `${margen.toFixed(2)}%` : '—'}</td>
+                            <td className="px-4 py-3.5">
+                              {!evaluada ? <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600">Sin evaluar</span>
+                                : c.es_rentable ? <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">Rentable (≥20%)</span>
+                                : margen > 0 ? <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">Margen Bajo (1–19%)</span>
+                                : <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700">No Rentable (≤0%)</span>}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {puedeEditarCot ? (
+                                <select value={c.estado} onChange={e => cambiarEstadoCot(c.id, e.target.value)} className="h-9 rounded-lg border border-slate-200 text-xs font-semibold px-2 bg-white focus:border-sky-500 focus:outline-none">
+                                  {['Nueva', 'En revisión', 'Enviada', 'Aceptada', 'Rechazada'].map(x => <option key={x}>{x}</option>)}
+                                </select>
+                              ) : <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${badgeEstado(c.estado)}`}>{cotEstadoLabel(c.estado)}</span>}
+                            </td>
+                            <td className="px-4 py-3.5 text-right">
+                              <div className="inline-flex items-center gap-2">
+                                <button onClick={() => setEvalCot(c)} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700">Evaluar Rentabilidad</button>
+                                <button disabled={!evaluada || c.estado === 'Aceptada'} onClick={() => setEvalCot(c)} className="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-600 text-white text-xs font-semibold shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">{c.estado === 'Aceptada' ? 'Ya convertida' : 'Convertir a Orden'}</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'inv' && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-slate-900">Catálogo de Repuestos e Inventario</h3>
+                {puedeGestionarInv && (
+                  <button onClick={() => setShowNuevoRep(true)} className="inline-flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-white font-semibold px-4 py-2 rounded-lg text-sm shadow-sm transition"><Plus size={16} /> Agregar / Reponer</button>
+                )}
+              </div>
+              {repuestos.length === 0 ? <p className="text-slate-500">No hay repuestos en el catálogo.</p> : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <tr><th className="px-4 py-3.5">Código</th><th className="px-4 py-3.5">Nombre</th><th className="px-4 py-3.5">Unidad</th><th className="px-4 py-3.5">Costo unitario</th><th className="px-4 py-3.5">Precio venta</th><th className="px-4 py-3.5">Stock</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm">
+                      {repuestos.map(r => (
+                        <tr key={r.id} className="hover:bg-slate-50/80 transition">
+                          <td className="px-4 py-3.5 font-mono font-semibold text-slate-900">{r.codigo}</td>
+                          <td className="px-4 py-3.5 font-semibold text-slate-900">{r.nombre}</td>
+                          <td className="px-4 py-3.5 text-slate-600">{r.unidad}</td>
+                          <td className="px-4 py-3.5 text-slate-700">{money(r.costo_unitario)}</td>
+                          <td className="px-4 py-3.5 text-slate-700">{money(r.precio_venta)}</td>
                           <td className="px-4 py-3.5">
-                            {puedeEditarCot ? (
-                              <select value={c.estado} onChange={e => cambiarEstadoCot(c.id, e.target.value)} className="h-9 rounded-lg border border-slate-200 text-xs font-semibold px-2 bg-white focus:border-sky-500 focus:outline-none">
-                                {['Nueva', 'En revisión', 'Enviada', 'Aceptada', 'Rechazada'].map(x => <option key={x}>{x}</option>)}
-                              </select>
-                            ) : <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${badgeEstado(c.estado)}`}>{cotEstadoLabel(c.estado)}</span>}
+                            <span className={`font-bold ${r.stock <= 3 ? 'text-red-600' : 'text-slate-900'}`}>{r.stock}</span>
+                            {r.stock <= 3 && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">Stock crítico</span>}
                           </td>
                         </tr>
                       ))}
@@ -410,15 +515,25 @@ export default function DashboardOficina({ user, logout }) {
                 <button onClick={() => setAsig(null)} className="text-slate-400 hover:text-slate-700"><X size={18} /></button>
               </div>
               <div className="space-y-2">
-                {[...tecnicos].sort((a, b) => (b.zona === asig.zona) - (a.zona === asig.zona)).map(t => (
-                  <div key={t.id} onClick={() => { if (t.disponible) setSel(t.id) }} className={`border-2 rounded-xl p-3 transition ${t.disponible ? 'cursor-pointer' : 'cursor-not-allowed opacity-50 bg-slate-50'} ${sel === t.id ? 'border-sky-500 bg-sky-50' : 'border-slate-200 hover:border-slate-300'}`}>
-                    <div className="flex items-center justify-between">
-                      <b className="text-slate-900">{t.nombre} { !t.disponible && <span className="text-xs text-slate-400 font-normal">— No disponible (Ocupado)</span>}</b>
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${t.disponible ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{t.disponible ? 'Disponible' : 'No disponible'}</span>
+                {[...tecnicos].sort((a, b) => (b.zona === asig.zona) - (a.zona === asig.zona)).map(t => {
+                  const mismaZona = t.zona === asig.zona
+                  return (
+                    <div key={t.id} onClick={() => { if (t.disponible) setSel(t.id) }} className={`border-2 rounded-xl p-3 transition ${t.disponible ? 'cursor-pointer' : 'cursor-not-allowed opacity-50 bg-slate-50'} ${sel === t.id ? 'border-sky-500 bg-sky-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <b className="text-slate-900">{t.nombre}</b>
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${t.disponible ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{t.disponible ? 'Disponible' : 'Ocupado / No disponible'}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-1">
+                        <span>{t.especialidad}</span><span>·</span>
+                        <span>{t.zona}</span>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full font-bold ${mismaZona ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{mismaZona ? 'Misma zona' : 'Otra zona'}</span>
+                        <span>·</span>
+                        <span>Carga actual: <b className="text-slate-700">{t.ordenes_activas ?? 0}</b></span>
+                      </div>
+                      {t.nota && <div className="text-xs text-slate-400 italic mt-1">“{t.nota}”</div>}
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">{t.zona} · {t.especialidad} · “{t.nota}”</div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
               <div className="flex justify-between mt-6">
                 <button onClick={() => setAsig(null)} className="px-4 py-2 rounded-lg border border-slate-200 font-semibold text-sm">Cancelar</button>
@@ -454,6 +569,219 @@ export default function DashboardOficina({ user, logout }) {
           </div>
         </div>
       )}
+      {showNuevoTec && <NuevoTecnicoModal onClose={() => setShowNuevoTec(false)} onGuardar={guardarTecnico} />}
+      {showNuevoRep && <NuevoRepuestoModal onClose={() => setShowNuevoRep(false)} onGuardar={guardarRepuesto} />}
+      {evalCot && (
+        <EvaluarCotizacionModal
+          cotizacion={evalCot}
+          repuestos={repuestos}
+          onClose={() => setEvalCot(null)}
+          onSaved={trasEvaluar}
+          onConvertido={trasConvertir}
+        />
+      )}
     </div>
+  )
+}
+
+function ModalShell({ title, subtitle, onClose, children, wide = false }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className={`bg-white rounded-2xl shadow-2xl ${wide ? 'max-w-4xl' : 'max-w-lg'} w-full overflow-hidden`}>
+        <div className="h-1.5 w-full bg-gradient-to-r from-sky-500 via-blue-600 to-cyan-400" />
+        <div className="p-6 max-h-[90vh] overflow-auto">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">{title}</h3>
+              {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={18} /></button>
+          </div>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NuevoTecnicoModal({ onClose, onGuardar }) {
+  const [f, setF] = useState({ nombre: '', email: '', password: '', zona: 'Los Lagos', especialidad: '', nota: '' })
+  const set = k => e => setF({ ...f, [k]: e.target.value })
+
+  return (
+    <ModalShell title="Nuevo técnico" subtitle="Se crea el técnico y su acceso con rol 'tecnico' y 2FA activo." onClose={onClose}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label className={labelCls}>Nombre</label><input value={f.nombre} onChange={set('nombre')} className={inputCls} placeholder="Ej. A. Muñoz" /></div>
+        <div><label className={labelCls}>Correo de acceso</label><input type="email" value={f.email} onChange={set('email')} className={inputCls} placeholder="tecnico@jgfrio.test" /></div>
+        <div><label className={labelCls}>Contraseña inicial</label><input type="password" value={f.password} onChange={set('password')} className={inputCls} placeholder="Contraseña temporal" /></div>
+        <div><label className={labelCls}>Zona</label><input value={f.zona} onChange={set('zona')} className={inputCls} /></div>
+        <div className="md:col-span-2"><label className={labelCls}>Especialidad</label><input value={f.especialidad} onChange={set('especialidad')} className={inputCls} placeholder="Refrigeración general" /></div>
+        <div className="md:col-span-2"><label className={labelCls}>Nota de estado</label><input value={f.nota} onChange={set('nota')} className={inputCls} placeholder="En base / En ruta" /></div>
+      </div>
+      <div className="flex justify-between gap-3 mt-6">
+        <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 font-semibold text-sm">Cancelar</button>
+        <button onClick={() => onGuardar(f)} className="px-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-white font-bold text-sm shadow-sm">Crear técnico</button>
+      </div>
+    </ModalShell>
+  )
+}
+
+function NuevoRepuestoModal({ onClose, onGuardar }) {
+  const [f, setF] = useState({ codigo: '', nombre: '', unidad: 'unidad', costo_unitario: 0, precio_venta: 0, stock: 1 })
+  const set = k => e => setF({ ...f, [k]: e.target.value })
+
+  return (
+    <ModalShell title="Agregar / reponer repuesto" subtitle="Si el código ya existe, se suma la cantidad al stock actual." onClose={onClose}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label className={labelCls}>Código</label><input value={f.codigo} onChange={set('codigo')} className={inputCls} placeholder="REP-007" /></div>
+        <div><label className={labelCls}>Nombre</label><input value={f.nombre} onChange={set('nombre')} className={inputCls} placeholder="Nombre del material" /></div>
+        <div><label className={labelCls}>Unidad</label><input value={f.unidad} onChange={set('unidad')} className={inputCls} /></div>
+        <div><label className={labelCls}>Stock / a reponer</label><input type="number" min="0" value={f.stock} onChange={set('stock')} className={inputCls} /></div>
+        <div><label className={labelCls}>Costo unitario (CLP)</label><input type="number" min="0" value={f.costo_unitario} onChange={set('costo_unitario')} className={inputCls} /></div>
+        <div><label className={labelCls}>Precio venta (CLP)</label><input type="number" min="0" value={f.precio_venta} onChange={set('precio_venta')} className={inputCls} /></div>
+      </div>
+      <div className="flex justify-between gap-3 mt-6">
+        <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 font-semibold text-sm">Cancelar</button>
+        <button onClick={() => onGuardar(f)} className="px-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-white font-bold text-sm shadow-sm">Guardar repuesto</button>
+      </div>
+    </ModalShell>
+  )
+}
+
+function EvaluarCotizacionModal({ cotizacion, repuestos, onClose, onSaved, onConvertido }) {
+  const [materiales, setMateriales] = useState(() => Array.isArray(cotizacion.materiales_estimados) ? cotizacion.materiales_estimados : [])
+  const [selRep, setSelRep] = useState('')
+  const [cant, setCant] = useState(1)
+  const [mano, setMano] = useState(cotizacion.costo_mano_obra || 0)
+  const [otros, setOtros] = useState(cotizacion.otros_costos || 0)
+  const [precio, setPrecio] = useState(cotizacion.precio_cotizado || 0)
+  const [notas, setNotas] = useState(cotizacion.notas_evaluacion || '')
+  const [estado, setEstado] = useState(cotizacion.estado || 'En revisión')
+  const [zona, setZona] = useState('Los Lagos')
+  const [urgencia, setUrgencia] = useState('Normal')
+  const [errLocal, setErrLocal] = useState('')
+
+  useEffect(() => { if (!selRep && repuestos.length) setSelRep(String(repuestos[0].id)) }, [repuestos, selRep])
+
+  const costoMateriales = materiales.reduce((s, m) => s + Number(m.cantidad || 0) * Number(m.costo_unitario || 0), 0)
+  const costoTotal = costoMateriales + Number(mano || 0) + Number(otros || 0)
+  const utilidad = Number(precio || 0) - costoTotal
+  const margen = Number(precio) > 0 ? (utilidad / Number(precio)) * 100 : (costoTotal > 0 ? -100 : 0)
+  const rentable = margen >= 20
+  const sinEvaluar = Number(precio) === 0 && costoTotal === 0
+
+  const agregar = () => {
+    const r = repuestos.find(x => x.id === Number(selRep))
+    if (!r) return
+    const n = Math.max(1, Math.floor(Number(cant) || 1))
+    setMateriales(prev => {
+      const i = prev.findIndex(m => Number(m.repuesto_id) === r.id)
+      if (i >= 0) {
+        const copia = [...prev]
+        copia[i] = { ...copia[i], cantidad: Number(copia[i].cantidad || 0) + n }
+        return copia
+      }
+      return [...prev, { repuesto_id: r.id, nombre: r.nombre, unidad: r.unidad, cantidad: n, costo_unitario: Number(r.costo_unitario || 0) }]
+    })
+    setCant(1)
+  }
+
+  const cambiarCantidad = (i, d) => setMateriales(prev => prev.map((m, idx) => idx === i ? { ...m, cantidad: Math.max(0, Number(m.cantidad || 0) + d) } : m))
+  const payload = () => ({
+    materiales_estimados: materiales.filter(m => Number(m.cantidad) > 0),
+    costo_mano_obra: Number(mano) || 0,
+    otros_costos: Number(otros) || 0,
+    precio_cotizado: Number(precio) || 0,
+    estado,
+    notas_evaluacion: notas,
+  })
+
+  const guardar = async () => {
+    setErrLocal('')
+    try { await evaluarCotizacion(cotizacion.id, payload()); onSaved() } catch (e) { setErrLocal(e.message) }
+  }
+  const convertir = async () => {
+    setErrLocal('')
+    try {
+      await evaluarCotizacion(cotizacion.id, payload())
+      await convertirCotizacionASolicitud(cotizacion.id, { zona, urgencia })
+      onConvertido()
+    } catch (e) { setErrLocal(e.message) }
+  }
+
+  return (
+    <ModalShell title={`Evaluar rentabilidad · COT-${String(cotizacion.id).padStart(4, '0')}`} subtitle={cotizacion.empresa} onClose={onClose} wide>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <h4 className="text-sm font-bold text-slate-900 mb-2">Materiales estimados</h4>
+          <div className="flex gap-2 items-end">
+            <div className="flex-1">
+              <label className={labelCls}>Repuesto del catálogo</label>
+              <select value={selRep} onChange={e => setSelRep(e.target.value)} className={inputCls}>
+                {repuestos.length === 0 && <option value="">Sin catálogo disponible</option>}
+                {repuestos.map(r => <option key={r.id} value={r.id}>{r.codigo} · {r.nombre} ({money(r.costo_unitario)}/{r.unidad})</option>)}
+              </select>
+            </div>
+            <div className="w-20"><label className={labelCls}>Cant.</label><input type="number" min="1" value={cant} onChange={e => setCant(e.target.value)} className={inputCls} /></div>
+            <button onClick={agregar} className="h-10 px-3 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-sm font-bold">Añadir</button>
+          </div>
+
+          <div className="space-y-2 max-h-52 overflow-auto mt-3">
+            {materiales.length === 0 ? <p className="text-xs text-slate-500">Aún no hay materiales agregados.</p> : materiales.map((m, i) => (
+              <div key={`${m.repuesto_id || m.nombre}-${i}`} className="flex items-center justify-between gap-2 border border-slate-200 rounded-lg p-2">
+                <div className="min-w-0">
+                  <b className="text-sm text-slate-900 block truncate">{m.nombre}</b>
+                  <span className="text-xs text-slate-500">{money(m.costo_unitario)} / {m.unidad || 'unidad'}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => cambiarCantidad(i, -1)} className="w-8 h-8 rounded-lg bg-slate-200 font-bold">−</button>
+                  <b className="w-7 text-center text-sm">{m.cantidad}</b>
+                  <button onClick={() => cambiarCantidad(i, 1)} className="w-8 h-8 rounded-lg bg-slate-200 font-bold">+</button>
+                  <button onClick={() => setMateriales(prev => prev.filter((_, idx) => idx !== i))} className="text-xs font-semibold text-red-500 hover:text-red-700">Quitar</button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+            <div><label className={labelCls}>Costo mano de obra (CLP)</label><input type="number" min="0" value={mano} onChange={e => setMano(e.target.value)} className={inputCls} /></div>
+            <div><label className={labelCls}>Otros costos / traslado (CLP)</label><input type="number" min="0" value={otros} onChange={e => setOtros(e.target.value)} className={inputCls} /></div>
+            <div><label className={labelCls}>Precio final al cliente (CLP)</label><input type="number" min="0" value={precio} onChange={e => setPrecio(e.target.value)} className={inputCls} /></div>
+            <div><label className={labelCls}>Estado</label><select value={estado} onChange={e => setEstado(e.target.value)} className={inputCls}>{['Nueva', 'En revisión', 'Enviada', 'Aceptada', 'Rechazada'].map(x => <option key={x}>{x}</option>)}</select></div>
+          </div>
+          <div className="mt-3"><label className={labelCls}>Notas de evaluación</label><textarea rows={2} value={notas} onChange={e => setNotas(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-slate-700 focus:bg-white focus:border-sky-500 focus:outline-none" /></div>
+        </div>
+
+        <div>
+          <h4 className="text-sm font-bold text-slate-900 mb-2">Resumen financiero (en tiempo real)</h4>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between bg-slate-50 rounded-xl px-4 py-2.5"><span className="text-slate-600">Costo materiales</span><b className="text-slate-900">{money(costoMateriales)}</b></div>
+            <div className="flex justify-between bg-slate-50 rounded-xl px-4 py-2.5"><span className="text-slate-600">Costo total</span><b className="text-slate-900">{money(costoTotal)}</b></div>
+            <div className={`flex justify-between rounded-xl px-4 py-2.5 ${utilidad >= 0 ? 'bg-emerald-50' : 'bg-red-50'}`}><span className={utilidad >= 0 ? 'text-emerald-700' : 'text-red-700'}>Utilidad neta</span><b className={utilidad >= 0 ? 'text-emerald-700' : 'text-red-700'}>{money(utilidad)}</b></div>
+            <div className="flex justify-between bg-slate-50 rounded-xl px-4 py-2.5"><span className="text-slate-600">Porcentaje de margen</span><b className="text-slate-900">{sinEvaluar ? '—' : `${margen.toFixed(2)}%`}</b></div>
+          </div>
+
+          <div className={`mt-4 rounded-xl border p-4 text-sm font-bold ${sinEvaluar ? 'bg-slate-100 border-slate-200 text-slate-600' : rentable ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+            {sinEvaluar ? 'Sin evaluar' : rentable ? 'ES RENTABLE (≥20%)' : 'NO ES RENTABLE (Pérdida / Margen insuficiente)'}
+          </div>
+
+          <div className="mt-4 border-t border-slate-200 pt-4">
+            <h4 className="text-sm font-bold text-slate-900 mb-2">Convertir a Orden de Servicio</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Zona</label><select value={zona} onChange={e => setZona(e.target.value)} className={inputCls}>{['Los Lagos', 'Maule', 'Ñuble'].map(x => <option key={x}>{x}</option>)}</select></div>
+              <div><label className={labelCls}>Urgencia</label><select value={urgencia} onChange={e => setUrgencia(e.target.value)} className={inputCls}>{['Urgente', 'Alta', 'Normal'].map(x => <option key={x}>{x}</option>)}</select></div>
+            </div>
+            <p className="text-xs text-slate-500 mt-2">La cotización pasa a 'Aceptada' y se crea una solicitud en 'Pendiente' con origen <b>Web (Cotización)</b>.</p>
+          </div>
+
+          {errLocal && <p className="text-red-600 text-sm mt-3">{errLocal}</p>}
+
+          <div className="flex flex-col sm:flex-row gap-2 mt-5">
+            <button onClick={guardar} className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 font-semibold text-sm hover:bg-slate-50">Guardar evaluación</button>
+            <button onClick={convertir} className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-sm"><CheckCircle2 size={16} /> Convertir a Orden <ArrowRight size={15} /></button>
+          </div>
+        </div>
+      </div>
+    </ModalShell>
   )
 }

@@ -2,6 +2,13 @@ import { useState, useRef, useEffect } from 'react'
 import { LogOut, Play, Loader, CheckCircle2, Wrench, Wifi, WifiOff } from 'lucide-react'
 import { getMisOrdenes, actualizarOrden, subirAdjunto, sincronizarColaOffline } from '../services/terrenoService'
 import { getTecnicos, cambiarDisponibilidad } from '../services/operacionesService'
+import { getRepuestos } from '../services/api'
+
+const REPUESTOS_BASE = [
+  { id: 1, codigo: 'REP-001', nombre: 'Compresor Hermético 3HP', unidad: 'unidad' },
+  { id: 2, codigo: 'REP-002', nombre: 'Gas Refrigerante R404A', unidad: 'kg' },
+  { id: 3, codigo: 'REP-003', nombre: 'Controlador Digital Full Gauge MT-512E', unidad: 'unidad' },
+]
 
 export default function VistaTecnico({ user, logout }) {
   const [tab, setTab] = useState('ord')
@@ -9,6 +16,9 @@ export default function VistaTecnico({ user, logout }) {
   const [toast, setToast] = useState('')
   const [ordenes, setOrdenes] = useState([])
   const [tecnicos, setTecnicos] = useState([])
+  const [catalogo, setCatalogo] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('cat_repuestos') || 'null') || REPUESTOS_BASE } catch { return REPUESTOS_BASE }
+  })
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [pend, setPend] = useState(() => {
@@ -29,6 +39,19 @@ export default function VistaTecnico({ user, logout }) {
       const t = ts.find(x => x.id === user.tecId)
       if (t) setPerfil({ zona: t.zona, nota: t.nota })
       if (!selectedId && os.length) setSelectedId(os[0].id)
+
+      try {
+        const cat = await getRepuestos()
+        setCatalogo(cat)
+        localStorage.setItem('cat_repuestos', JSON.stringify(cat))
+      } catch {
+        const guardado = localStorage.getItem('cat_repuestos')
+        if (guardado) {
+          try { setCatalogo(JSON.parse(guardado)) } catch { setCatalogo(REPUESTOS_BASE) }
+        } else {
+          setCatalogo(REPUESTOS_BASE)
+        }
+      }
     } catch (e) { setErr(e.message) } finally { setLoading(false) }
   }
 
@@ -158,7 +181,7 @@ export default function VistaTecnico({ user, logout }) {
 
             <div className="lg:col-span-7">
               {selected ? (
-                <OrdenDetalle o={selected} flash={flash} cambiar={cambiar} off={off} />
+                <OrdenDetalle o={selected} flash={flash} cambiar={cambiar} off={off} catalogo={catalogo} />
               ) : (
                 <div className="bg-white rounded-2xl border border-slate-200/80 p-6 text-slate-500 text-sm">Selecciona una orden para ver el detalle.</div>
               )}
@@ -172,7 +195,7 @@ export default function VistaTecnico({ user, logout }) {
   )
 }
 
-function OrdenDetalle({ o, flash, cambiar, off }) {
+function OrdenDetalle({ o, flash, cambiar, off, catalogo = [] }) {
   const [rep, setRep] = useState(o.repuestos || o.rep || {})
   const [obs, setObs] = useState(o.observacion || o.obs || '')
   const cv = useRef()
@@ -197,8 +220,6 @@ function OrdenDetalle({ o, flash, cambiar, off }) {
       }, 'image/png')
     }
   }
-  const repuestosList = ['Compresor 3HP', 'Gas refrigerante R404A', 'Controlador digital']
-
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-6 space-y-5">
       <div className="flex items-center justify-between">
@@ -220,13 +241,16 @@ function OrdenDetalle({ o, flash, cambiar, off }) {
       <div>
         <b className="text-sm text-slate-900 flex items-center gap-1"><Wrench size={14} /> Repuestos</b>
         <div className="mt-2 space-y-2">
-          {repuestosList.map(r => (
-            <div key={r} className="flex items-center justify-between">
-              <span className="text-sm text-slate-700">{r}</span>
+          {catalogo.length === 0 ? <p className="text-xs text-slate-500">Sin catálogo disponible. Se usarán los repuestos básicos.</p> : catalogo.map(r => (
+            <div key={r.id || r.nombre} className="flex items-center justify-between gap-2">
+              <span className="text-sm text-slate-700">
+                {r.nombre}
+                {r.unidad && <span className="text-xs text-slate-400"> · {r.unidad}</span>}
+              </span>
               <div className="flex items-center gap-2">
-                <button onClick={() => set(r, -1)} className="w-12 h-12 rounded-xl bg-slate-200 font-bold text-xl flex items-center justify-center">−</button>
-                <b className="w-8 text-center text-lg">{rep[r] || 0}</b>
-                <button onClick={() => set(r, 1)} className="w-12 h-12 rounded-xl bg-slate-200 font-bold text-xl flex items-center justify-center">+</button>
+                <button onClick={() => set(r.nombre, -1)} className="w-12 h-12 rounded-xl bg-slate-200 font-bold text-xl flex items-center justify-center">−</button>
+                <b className="w-8 text-center text-lg">{rep[r.nombre] || 0}</b>
+                <button onClick={() => set(r.nombre, 1)} className="w-12 h-12 rounded-xl bg-slate-200 font-bold text-xl flex items-center justify-center">+</button>
               </div>
             </div>
           ))}

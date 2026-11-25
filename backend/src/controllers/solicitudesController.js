@@ -102,8 +102,8 @@ export async function patchAsignar(req, res, next) {
       return res.status(400).json({ error: 'tec_id es obligatorio' });
     }
 
-    // Validar que el técnico exista y esté disponible
-    const { rows: tecRows } = await query('SELECT disponible FROM tecnicos WHERE id = $1', [tecId]);
+    // Validar que el técnico exista y esté disponible (409 si está ocupado).
+    const { rows: tecRows } = await query('SELECT disponible, zona FROM tecnicos WHERE id = $1', [tecId]);
     if (tecRows.length === 0) {
       return res.status(404).json({ error: 'Técnico no encontrado' });
     }
@@ -123,13 +123,21 @@ export async function patchAsignar(req, res, next) {
       return res.status(404).json({ error: 'Solicitud no encontrada' });
     }
 
+    const asignada = rows[0];
+    const fueraDeZona = asignada.zona !== tecRows[0].zona;
+
     await registrarAuditoria({
       usuario: req.user.email,
       accion: 'Asignación de técnico',
-      detalle: `Solicitud ${id} asignada a técnico ${tecId}`,
+      detalle: `Solicitud ${id} asignada a técnico ${tecId}${fueraDeZona ? ' (fuera de zona)' : ''}`,
     });
 
-    res.json(rows[0]);
+    res.json({
+      ...asignada,
+      fuera_de_zona: fueraDeZona,
+      zona_solicitud: asignada.zona,
+      zona_tecnico: tecRows[0].zona,
+    });
   } catch (error) {
     next(error);
   }

@@ -3,6 +3,7 @@
 
 import { query } from '../config/db.js';
 import { registrarAuditoria } from '../utils/audit.js';
+import { registrarConsumoRepuestos } from './repuestosController.js';
 
 // GET /api/ordenes/mias
 export async function getMisOrdenes(req, res, next) {
@@ -97,9 +98,14 @@ export async function patchOrden(req, res, next) {
     const { rows } = await query(sql, params);
     const actualizada = rows[0];
 
-    // Si pasa a Finalizado: registrar en historial del cliente
+    // Si pasa a Finalizado: descontar inventario y registrar en historial del cliente
     if (estado === 'Finalizado') {
-      const resumen = `Orden ${id} finalizada. Obs: ${observacion || ''}. Repuestos: ${JSON.stringify(repuestos || {})}`;
+      await registrarConsumoRepuestos({
+        solicitudId: id,
+        repuestos: repuestos !== undefined ? repuestos : actualizada.repuestos,
+        usuario: req.user.email,
+      });
+      const resumen = `Orden ${id} finalizada. Obs: ${observacion || ''}. Repuestos: ${JSON.stringify(repuestos || actualizada.repuestos || {})}`;
       await query(
         `INSERT INTO historial (cliente_id, fecha, tipo, descripcion) VALUES ($1, CURRENT_DATE, $2, $3)`,
         [orden.cliente_id, 'Orden finalizada', resumen]
@@ -202,6 +208,13 @@ export async function syncOrdenes(req, res, next) {
           `UPDATE solicitudes SET ${campos.join(', ')} WHERE id = $${idx}`,
           params
         );
+        if (cambio.estado === 'Finalizado') {
+          await registrarConsumoRepuestos({
+            solicitudId: id,
+            repuestos: cambio.repuestos,
+            usuario: req.user.email,
+          });
+        }
       }
 
       await registrarAuditoria({
