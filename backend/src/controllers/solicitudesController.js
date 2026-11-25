@@ -33,7 +33,7 @@ export async function getSolicitudes(req, res, next) {
 
     const sql = `
       SELECT s.id, s.cliente_id, s.zona, s.urgencia, s.origen, s.estado, s.tec_id, s.falla,
-             s.repuestos, s.observacion, s.firma, s.created_at,
+             s.repuestos, s.materiales_presupuestados, s.observacion, s.firma, s.created_at,
              c.nombre AS cliente_nombre
       FROM solicitudes s
       JOIN clientes c ON c.id = s.cliente_id

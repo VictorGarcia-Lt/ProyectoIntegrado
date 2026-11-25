@@ -214,13 +214,17 @@ export async function convertirCotizacion(req, res, next) {
     }
 
     const zonaFinal = zona || cliente.zona;
+    const materialesPresupuestados = Array.isArray(cotizacion.materiales_estimados)
+      ? cotizacion.materiales_estimados
+      : [];
 
     await client.query('BEGIN');
     const { rows: solicitudes } = await client.query(
-      `INSERT INTO solicitudes (cliente_id, zona, urgencia, origen, estado, falla)
-       VALUES ($1, $2, $3, 'Web (Cotización)', 'Pendiente', $4)
-       RETURNING id, cliente_id, zona, urgencia, origen, estado, tec_id, falla, repuestos, observacion, firma, created_at`,
-      [cliente.id, zonaFinal, urgencia, cotizacion.descripcion]
+      `INSERT INTO solicitudes (cliente_id, zona, urgencia, origen, estado, falla, materiales_presupuestados)
+       VALUES ($1, $2, $3, 'Web (Cotización)', 'Pendiente', $4, $5::jsonb)
+       RETURNING id, cliente_id, zona, urgencia, origen, estado, tec_id, falla, repuestos,
+                 materiales_presupuestados, observacion, firma, created_at`,
+      [cliente.id, zonaFinal, urgencia, cotizacion.descripcion, JSON.stringify(materialesPresupuestados)]
     );
     const solicitud = solicitudes[0];
 

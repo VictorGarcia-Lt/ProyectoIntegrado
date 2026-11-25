@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ClipboardList, Users, FileText, BarChart3, ShieldCheck, LogOut, AlertTriangle, Wrench, UserCheck, Bell, Plus, Search, Globe, Phone, MessageCircle, Radio, Truck, Snowflake, X, Building2, Activity, Clock, Package, DollarSign, TrendingUp, CheckCircle2, ArrowRight } from 'lucide-react'
+import { ClipboardList, Users, FileText, BarChart3, ShieldCheck, LogOut, AlertTriangle, Wrench, UserCheck, Bell, Plus, Search, Globe, Phone, MessageCircle, Radio, Truck, Snowflake, X, Building2, Activity, Clock, Package, DollarSign, TrendingUp, CheckCircle2, ArrowRight, Eye } from 'lucide-react'
 import { getSolicitudes, crearSolicitud, asignarTecnico, getClientes, getHistorialCliente, getTecnicos, cambiarDisponibilidad } from '../services/operacionesService'
 import { getCotizaciones, cambiarEstadoCotizacion } from '../services/gestionService'
 import { getResumenReportes, getAuditoria } from '../services/gestionService'
@@ -15,6 +15,32 @@ const money = n => '$' + Number(n || 0).toLocaleString('es-CL')
 const costoTotalCot = c => Number(c.costo_materiales || 0) + Number(c.costo_mano_obra || 0) + Number(c.otros_costos || 0)
 const inputCls = 'mt-1 w-full h-10 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-slate-700 focus:bg-white focus:border-sky-500 focus:outline-none'
 const labelCls = 'text-sm font-semibold text-slate-700'
+
+// Unifica presupuesto (arreglo de ítems) y consumo real (objeto JSONB) por nombre.
+function compararMateriales(orden) {
+  const presup = Array.isArray(orden.materiales_presupuestados) ? orden.materiales_presupuestados : []
+  const reales = orden.repuestos && typeof orden.repuestos === 'object' && !Array.isArray(orden.repuestos) ? orden.repuestos : {}
+  const clave = nombre => String(nombre || '').trim().toLowerCase()
+  const mapa = new Map()
+
+  presup.forEach(m => {
+    const k = clave(m.nombre)
+    if (!k) return
+    const fila = mapa.get(k) || { nombre: m.nombre, unidad: m.unidad || '', sugerido: 0, usado: 0, costo: Number(m.costo_unitario || 0) }
+    fila.sugerido += Number(m.cantidad || 0)
+    mapa.set(k, fila)
+  })
+
+  Object.entries(reales).forEach(([nombre, cantidad]) => {
+    const k = clave(nombre)
+    if (!k) return
+    const fila = mapa.get(k) || { nombre, unidad: '', sugerido: 0, usado: 0, costo: 0 }
+    fila.usado += Number(cantidad || 0)
+    mapa.set(k, fila)
+  })
+
+  return Array.from(mapa.values()).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)))
+}
 
 export default function DashboardOficina({ user, logout }) {
   const [tab, setTab] = useState('sol')
@@ -36,6 +62,7 @@ export default function DashboardOficina({ user, logout }) {
   const [asig, setAsig] = useState(null)
   const [sel, setSel] = useState(null)
   const [ficha, setFicha] = useState(null)
+  const [detalle, setDetalle] = useState(null)
   const [histFicha, setHistFicha] = useState([])
   const [nueva, setNueva] = useState({ cli: 1, origen: 'Teléfono', urg: 'Normal', falla: '' })
 
@@ -226,6 +253,7 @@ export default function DashboardOficina({ user, logout }) {
                           <td className="px-4 py-3.5">{t ? <span className="inline-flex items-center"><span className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 grid place-items-center text-xs font-bold mr-2">{t.nombre.replace(/[^A-ZÁÉÍÓÚ]/g, '').slice(0, 2)}</span>{t.nombre}</span> : '—'}</td>
                           <td className="px-4 py-3.5 text-right">
                             <div className="inline-flex items-center gap-2">
+                              <button className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700" onClick={() => setDetalle(s)}><Eye size={13} /> Detalle</button>
                               <button className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700" onClick={() => abrirFicha(cn(s.cliente_id))}>Ficha</button>
                               {puedeAsignar && s.estado === 'Pendiente' && <button className="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-600 text-white text-xs font-semibold shadow-sm" onClick={() => setAsig(s)}>Asignar</button>}
                             </div>
@@ -569,6 +597,7 @@ export default function DashboardOficina({ user, logout }) {
           </div>
         </div>
       )}
+      {detalle && <DetalleOrdenModal orden={detalle} tecnicos={tecnicos} onClose={() => setDetalle(null)} />}
       {showNuevoTec && <NuevoTecnicoModal onClose={() => setShowNuevoTec(false)} onGuardar={guardarTecnico} />}
       {showNuevoRep && <NuevoRepuestoModal onClose={() => setShowNuevoRep(false)} onGuardar={guardarRepuesto} />}
       {evalCot && (
@@ -601,6 +630,87 @@ function ModalShell({ title, subtitle, onClose, children, wide = false }) {
         </div>
       </div>
     </div>
+  )
+}
+
+function DetalleOrdenModal({ orden, tecnicos, onClose }) {
+  const filas = compararMateriales(orden)
+  const tecnico = tecnicos.find(t => t.id === orden.tec_id)
+  const adicionales = filas.filter(f => f.usado > f.sugerido)
+  const fueraDePresupuesto = filas.filter(f => f.sugerido === 0 && f.usado > 0)
+
+  return (
+    <ModalShell
+      title={`Detalle de orden · ${orden.id}`}
+      subtitle={`${orden.cliente_nombre || ''} · ${orden.origen || ''} · ${orden.zona || ''}`}
+      onClose={onClose}
+      wide
+    >
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3"><span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Estado</span><span className="text-sm font-bold text-slate-900">{orden.estado}</span></div>
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3"><span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Urgencia</span><span className="text-sm font-bold text-slate-900">{orden.urgencia}</span></div>
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3"><span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Técnico</span><span className="text-sm font-bold text-slate-900">{tecnico?.nombre || 'Sin asignar'}</span></div>
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3"><span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Firma</span><span className={`text-sm font-bold ${orden.firma ? 'text-emerald-700' : 'text-slate-600'}`}>{orden.firma ? 'Registrada' : 'Sin firma'}</span></div>
+      </div>
+
+      <h4 className="text-sm font-bold text-slate-900 mb-2">Materiales: presupuestado vs. real</h4>
+      {filas.length === 0 ? (
+        <p className="text-sm text-slate-500 rounded-xl bg-slate-50 border border-slate-200 p-3">Esta orden no tiene materiales presupuestados ni consumos registrados.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-left border-collapse">
+            <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <tr><th className="px-3 py-2.5">Material</th><th className="px-3 py-2.5 text-center">Sugerido</th><th className="px-3 py-2.5 text-center">Usado</th><th className="px-3 py-2.5 text-center">Diferencia</th><th className="px-3 py-2.5">Resultado</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-sm">
+              {filas.map((f, i) => {
+                const diff = f.usado - f.sugerido
+                return (
+                  <tr key={`${f.nombre}-${i}`} className={diff > 0 ? 'bg-amber-50/60' : ''}>
+                    <td className="px-3 py-2.5 font-semibold text-slate-900">{f.nombre}{f.unidad && <span className="text-xs font-normal text-slate-500"> · {f.unidad}</span>}</td>
+                    <td className="px-3 py-2.5 text-center text-slate-700">{f.sugerido}</td>
+                    <td className="px-3 py-2.5 text-center font-bold text-slate-900">{f.usado}</td>
+                    <td className={`px-3 py-2.5 text-center font-bold ${diff > 0 ? 'text-amber-700' : diff < 0 ? 'text-slate-500' : 'text-emerald-700'}`}>{diff > 0 ? '+' : ''}{diff}</td>
+                    <td className="px-3 py-2.5">
+                      {diff > 0
+                        ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">Consumo adicional</span>
+                        : f.usado === 0 && f.sugerido > 0
+                          ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">Sin consumo</span>
+                          : <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">Según presupuesto</span>}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {adicionales.length > 0 && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 p-3 text-xs font-semibold">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          Consumo adicional detectado en {adicionales.length} material(es){fueraDePresupuesto.length > 0 ? `, ${fueraDePresupuesto.length} fuera de presupuesto` : ''}.
+        </div>
+      )}
+
+      <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <h4 className="text-sm font-bold text-slate-900 mb-2">Observación del técnico</h4>
+          <p className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm text-slate-700 whitespace-pre-wrap">{orden.observacion || 'Sin observación registrada.'}</p>
+        </div>
+        <div>
+          <h4 className="text-sm font-bold text-slate-900 mb-2">Firma del cliente</h4>
+          <div className={`rounded-xl border p-3 text-sm font-semibold ${orden.firma ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+            {orden.firma ? 'Firma registrada y archivada' : 'Sin firma registrada'}
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Falla reportada: {orden.falla || '—'}</p>
+        </div>
+      </div>
+
+      <div className="flex justify-end mt-5">
+        <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 font-semibold text-sm">Cerrar</button>
+      </div>
+    </ModalShell>
   )
 }
 

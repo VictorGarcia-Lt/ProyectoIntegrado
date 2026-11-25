@@ -14,7 +14,8 @@ export async function getMisOrdenes(req, res, next) {
     if (req.user.rol === 'tecnico') {
       sql = `
         SELECT s.id, s.cliente_id, s.zona, s.urgencia, s.origen, s.estado, s.tec_id, s.falla,
-               s.repuestos, s.observacion, s.firma, s.created_at, c.nombre AS cliente_nombre
+               s.repuestos, s.materiales_presupuestados, s.observacion, s.firma, s.created_at,
+               c.nombre AS cliente_nombre
         FROM solicitudes s
         JOIN clientes c ON c.id = s.cliente_id
         WHERE s.tec_id = $1 AND s.estado IN ('Asignada','En proceso','Finalizado')
@@ -24,7 +25,8 @@ export async function getMisOrdenes(req, res, next) {
     } else {
       sql = `
         SELECT s.id, s.cliente_id, s.zona, s.urgencia, s.origen, s.estado, s.tec_id, s.falla,
-               s.repuestos, s.observacion, s.firma, s.created_at, c.nombre AS cliente_nombre
+               s.repuestos, s.materiales_presupuestados, s.observacion, s.firma, s.created_at,
+               c.nombre AS cliente_nombre
         FROM solicitudes s
         JOIN clientes c ON c.id = s.cliente_id
         WHERE s.estado IN ('Asignada','En proceso','Finalizado')

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { LogOut, Play, Loader, CheckCircle2, Wrench, Wifi, WifiOff } from 'lucide-react'
+import { LogOut, Play, Loader, CheckCircle2, Wrench, Wifi, WifiOff, ClipboardList } from 'lucide-react'
 import { getMisOrdenes, actualizarOrden, subirAdjunto, sincronizarColaOffline } from '../services/terrenoService'
 import { getTecnicos, cambiarDisponibilidad } from '../services/operacionesService'
 import { getRepuestos } from '../services/api'
@@ -198,23 +198,121 @@ export default function VistaTecnico({ user, logout }) {
 function OrdenDetalle({ o, flash, cambiar, off, catalogo = [] }) {
   const [rep, setRep] = useState(o.repuestos || o.rep || {})
   const [obs, setObs] = useState(o.observacion || o.obs || '')
-  const cv = useRef()
-  const draw = useRef(false)
-  const [firmado, setFirmado] = useState(o.firma || false)
+  const cv = useRef(null)
+  const isDrawingRef = useRef(false)
+  const hasSignedRef = useRef(false)
+  const [firmado, setFirmado] = useState(Boolean(o.firma))
 
-  useEffect(() => { const c = cv.current; if (c) { c.width = c.offsetWidth || 400; c.height = 160 } }, [])
+  // El bitmap debe coincidir con el tamaño CSS y con el DPR del dispositivo;
+  // si no, las coordenadas del dedo/cursor no caen sobre el trazo dibujado.
+  useEffect(() => {
+    const canvas = cv.current
+    if (!canvas) return
 
-  const pos = e => { const r = cv.current.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] }
-  const down = e => { draw.current = true; const x = cv.current.getContext('2d'); x.beginPath(); x.moveTo(...pos(e)) }
-  const move = e => { if (!draw.current) return; const x = cv.current.getContext('2d'); x.lineWidth = 2.5; x.lineTo(...pos(e)); x.stroke(); setFirmado(true) }
-  const limpiar = () => { cv.current.getContext('2d').clearRect(0, 0, 9999, 9999); setFirmado(false) }
+    const sincronizar = () => {
+      const rect = canvas.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+      const dpr = window.devicePixelRatio || 1
+      const ancho = Math.round(rect.width * dpr)
+      const alto = Math.round(rect.height * dpr)
+      if (canvas.width === ancho && canvas.height === alto) return
+
+      let previo = null
+      if (hasSignedRef.current && canvas.width && canvas.height) {
+        previo = document.createElement('canvas')
+        previo.width = canvas.width
+        previo.height = canvas.height
+        previo.getContext('2d').drawImage(canvas, 0, 0)
+      }
+
+      canvas.width = ancho
+      canvas.height = alto
+      const ctx = canvas.getContext('2d')
+      ctx.scale(dpr, dpr)
+      if (previo) ctx.drawImage(previo, 0, 0, previo.width, previo.height, 0, 0, rect.width, rect.height)
+    }
+
+    sincronizar()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sincronizar) : null
+    if (ro) ro.observe(canvas)
+    window.addEventListener('resize', sincronizar)
+    return () => {
+      if (ro) ro.disconnect()
+      window.removeEventListener('resize', sincronizar)
+    }
+  }, [])
+
+  // Al cambiar de orden, se descarta la firma de la orden anterior.
+  useEffect(() => {
+    isDrawingRef.current = false
+    hasSignedRef.current = false
+    setRep(o.repuestos || o.rep || {})
+    setObs(o.observacion || o.obs || '')
+    setFirmado(Boolean(o.firma))
+    const canvas = cv.current
+    if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
+  }, [o.id])
+
+  const pos = e => {
+    const r = cv.current.getBoundingClientRect()
+    return [e.clientX - r.left, e.clientY - r.top]
+  }
+
+  const alIniciar = e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    const canvas = cv.current
+    if (!canvas) return
+    e.preventDefault()
+    try { if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId) } catch { /* puntero ya liberado */ }
+    isDrawingRef.current = true
+    const ctx = canvas.getContext('2d')
+    ctx.strokeStyle = '#0f172a'
+    ctx.lineWidth = 2.5
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    ctx.moveTo(...pos(e))
+  }
+
+  const alMover = e => {
+    if (!isDrawingRef.current || !cv.current) return
+    e.preventDefault()
+    const ctx = cv.current.getContext('2d')
+    ctx.lineTo(...pos(e))
+    ctx.stroke()
+    if (!hasSignedRef.current) {
+      hasSignedRef.current = true
+      setFirmado(true) // un solo re-render por trazo: React no borra el buffer
+    }
+  }
+
+  const alTerminar = e => {
+    if (!isDrawingRef.current) return
+    isDrawingRef.current = false
+    try {
+      if (e.currentTarget.hasPointerCapture && e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+    } catch { /* el puntero ya se liberó */ }
+    if (cv.current) cv.current.getContext('2d').closePath()
+  }
+
+  const limpiar = () => {
+    const canvas = cv.current
+    if (!canvas) return
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
+    isDrawingRef.current = false
+    hasSignedRef.current = false
+    setFirmado(false)
+  }
+
   const set = (k, d) => setRep(r => ({ ...r, [k]: Math.max(0, (r[k] || 0) + d) }))
   const elegir = async e => {
     if (e === 'Finalizado' && !obs.trim()) return flash('La observación es obligatoria para finalizar')
     const cambio = { estado: e, repuestos: rep, observacion: obs }
     const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now() + Math.random())
     await cambiar(o.id, cambio, `${o.id} → ${e}`, uuid)
-    if (firmado && !off && cv.current) {
+    if (hasSignedRef.current && !off && cv.current) {
       cv.current.toBlob(async blob => {
         if (blob) { try { await subirAdjunto(o.id, blob, 'firma') } catch (err) { flash('Error al subir firma: ' + err.message) } }
       }, 'image/png')
@@ -238,8 +336,31 @@ function OrdenDetalle({ o, flash, cambiar, off, catalogo = [] }) {
         ))}
       </div>
 
+      {Array.isArray(o.materiales_presupuestados) && o.materiales_presupuestados.length > 0 && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-3">
+          <b className="text-sm text-sky-900 flex items-center gap-1"><ClipboardList size={14} /> Materiales sugeridos por presupuesto</b>
+          <div className="mt-2 space-y-1.5">
+            {o.materiales_presupuestados.map((m, i) => {
+              const sugerido = Number(m.cantidad || 0)
+              const usado = Number(rep[m.nombre] || 0)
+              return (
+                <div key={`${m.nombre || 'material'}-${i}`} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-700 font-medium">{m.nombre}{m.unidad ? ` · ${m.unidad}` : ''}</span>
+                  <span className="inline-flex items-center gap-2 text-slate-500">
+                    Sugerido: <b className="text-slate-800">{sugerido}</b>
+                    <span className="text-slate-300">|</span>
+                    Usado: <b className="text-slate-800">{usado}</b>
+                    {usado > sugerido && <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">Consumo adicional</span>}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       <div>
-        <b className="text-sm text-slate-900 flex items-center gap-1"><Wrench size={14} /> Repuestos</b>
+        <b className="text-sm text-slate-900 flex items-center gap-1"><Wrench size={14} /> Repuestos utilizados</b>
         <div className="mt-2 space-y-2">
           {catalogo.length === 0 ? <p className="text-xs text-slate-500">Sin catálogo disponible. Se usarán los repuestos básicos.</p> : catalogo.map(r => (
             <div key={r.id || r.nombre} className="flex items-center justify-between gap-2">
@@ -263,8 +384,21 @@ function OrdenDetalle({ o, flash, cambiar, off, catalogo = [] }) {
       </div>
 
       <div>
-        <label className="text-sm font-semibold text-slate-700">Firma del cliente</label>
-        <canvas ref={cv} className="mt-1 w-full h-40 border-2 border-dashed border-slate-300 rounded-xl bg-white" />
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-sm font-semibold text-slate-700">Firma del cliente</label>
+          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${firmado ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+            {firmado ? 'Firma capturada' : 'Sin firma'}
+          </span>
+        </div>
+        <canvas
+          ref={cv}
+          onPointerDown={alIniciar}
+          onPointerMove={alMover}
+          onPointerUp={alTerminar}
+          onPointerLeave={alTerminar}
+          onPointerCancel={alTerminar}
+          className="mt-1 w-full h-40 touch-none select-none cursor-crosshair bg-white border-2 border-dashed border-slate-300 rounded-xl"
+        />
         <button onClick={limpiar} className="mt-2 text-xs font-semibold text-slate-500 hover:text-sky-600">Limpiar firma</button>
       </div>
     </div>
